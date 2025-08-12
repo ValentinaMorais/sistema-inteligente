@@ -30,6 +30,12 @@ Como analista de suporte técnico, a organização e a priorização dos chamado
    ```bash
    git clone https://github.com/seuusuario/sistema-inteligente.git
 
+\* Observações importantes!
+
+- Recomendo criar um ambiente virtual
+- Instale as dependências
+- Execute o programa! (python main.py)
+
 ## Futuras melhorias
 
 - Implementar notificações automáticas para tickets com prazo próximo.
