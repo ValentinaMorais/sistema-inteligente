@@ -46,6 +46,8 @@ Como analista de suporte técnico, a organização e a priorização dos chamado
 ```bash
 python main.py
 
+--
+
 
 ## Futuras melhorias
 
