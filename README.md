@@ -33,8 +33,19 @@ Como analista de suporte técnico, a organização e a priorização dos chamado
 \* Observações importantes!
 
 - Recomendo criar um ambiente virtual
+- ```bash
+  python -m venv .venv
+  source .venv/bin/activate
+  .venv\Scripts\activate
+  
 - Instale as dependências
-- Execute o programa! (python main.py)
+  ```bash
+  .venv\Scripts\activate
+  
+- Execute o programa! 
+```bash
+python main.py
+
 
 ## Futuras melhorias
 
