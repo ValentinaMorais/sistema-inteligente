@@ -42,11 +42,7 @@ Como analista de suporte técnico, a organização e a priorização dos chamado
   ```bash
   .venv\Scripts\activate
   
-- Execute o programa! 
-```bash
-python main.py
-
-------
+- Execute o programa! (python main.py)
 
 
 
