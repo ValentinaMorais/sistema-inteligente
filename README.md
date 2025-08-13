@@ -33,7 +33,7 @@ Como analista de suporte técnico, a organização e a priorização dos chamado
 \* Observações importantes!
 
 - Recomendo criar um ambiente virtual
-- ```bash
+-  ```bash
   python -m venv .venv
   source .venv/bin/activate
   .venv\Scripts\activate
