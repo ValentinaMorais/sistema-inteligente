@@ -1,12 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-from tkcalendar import DateEntry
 from datetime import datetime, timedelta
 import sqlite3
 import csv
 import bcrypt
 import os
-import sys
 
 DB_NAME = "sistema.db"
 
@@ -34,7 +32,7 @@ def init_db():
             titulo TEXT NOT NULL,
             descricao TEXT NOT NULL,
             prioridade TEXT NOT NULL,        -- Baixa, Média, Alta
-            prazo TEXT NOT NULL,             -- dd/mm/yyyy
+            prazo TEXT NOT NULL,             -- dd/mm/yyyy HH:MM (SLA automático)
             status TEXT NOT NULL,            -- Aberto, Em Andamento, Fechado
             responsavel TEXT NOT NULL,
             criado_em TEXT NOT NULL
@@ -54,22 +52,34 @@ def bcrypt_hash(pwd: str) -> bytes:
 def bcrypt_check(pwd: str, hashed: bytes) -> bool:
     return bcrypt.checkpw(pwd.encode("utf-8"), hashed)
 
-def data_pt_to_iso(d: str) -> str:
-    # dd/mm/yyyy -> yyyy-mm-dd
-    try:
-        return datetime.strptime(d, "%d/%m/%Y").strftime("%Y-%m-%d")
-    except:
-        return d
+def hoje_str_date():
+    return datetime.now().strftime("%d/%m/%Y %H:%M")
 
-def data_iso_to_pt(d: str) -> str:
-    # yyyy-mm-dd -> dd/mm/yyyy
-    try:
-        return datetime.strptime(d, "%Y-%m-%d").strftime("%d/%m/%Y")
-    except:
-        return d
+def parse_prazo(prazo_str: str):
+    """
+    Tenta interpretar prazos nos formatos:
+    - dd/mm/yyyy HH:MM
+    - dd/mm/yyyy
+    Retorna datetime ou None.
+    """
+    for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(prazo_str, fmt)
+        except:
+            continue
+    return None
 
-def hoje_str():
-    return datetime.now().strftime("%d/%m/%Y")
+def calc_sla_deadline(prioridade: str) -> str:
+    """Retorna prazo no formato dd/mm/yyyy HH:MM com base na prioridade."""
+    now = datetime.now()
+    if prioridade == "Alta":
+        delta = timedelta(hours=4)
+    elif prioridade == "Média":
+        delta = timedelta(hours=24)
+    else:
+        delta = timedelta(hours=72)
+    prazo = now + delta
+    return prazo.strftime("%d/%m/%Y %H:%M")
 
 # =========================
 # LOGIN WINDOW
@@ -136,7 +146,6 @@ class LoginWindow(tk.Tk):
         cur.execute("SELECT senha FROM usuarios WHERE usuario=?", (u,))
         row = cur.fetchone()
         if row and bcrypt_check(p, row[0]):
-            # marcar online
             cur.execute("UPDATE usuarios SET is_online=1, last_login=? WHERE usuario=?", (datetime.now().isoformat(timespec="seconds"), u))
             con.commit()
             con.close()
@@ -170,12 +179,12 @@ class MainApp(tk.Tk):
         style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
         style.map("Treeview", background=[("selected", "#4a90e2")], foreground=[("selected", "white")])
 
-        # ---------- Banner de Avisos ----------
+        # ---------- Banner ----------
         self.banner = tk.Label(self, text="", anchor="w", padx=12, pady=6, font=("Segoe UI", 10, "bold"))
         self.banner.pack(fill=tk.X, padx=10, pady=(10, 6))
-        self._set_banner("Bem-vinda(o), {}! Use os filtros para localizar tickets rapidamente.".format(self.usuario), bg="#e8f1ff", fg="#184a90")
+        self._set_banner(f"Bem-vinda(o), {self.usuario}! Use os filtros para localizar tickets rapidamente.", bg="#e8f1ff", fg="#184a90")
 
-        # ---------- Área superior: filtros e ações ----------
+        # ---------- Topbar (filtros + ações) ----------
         topbar = tk.Frame(self, bg="#f5f6fa")
         topbar.pack(fill=tk.X, padx=10)
 
@@ -197,7 +206,7 @@ class MainApp(tk.Tk):
         ttk.Button(topbar, text="Exportar CSV", command=self.exportar_csv).grid(row=0, column=6, padx=10)
         ttk.Button(topbar, text="Sair", command=self.sair).grid(row=0, column=7, padx=6)
 
-        # ---------- Formulário de criação ----------
+        # ---------- Formulário de criação (prazo automático por SLA) ----------
         form = tk.LabelFrame(self, text="Novo Ticket", bg="#f5f6fa", fg="#2f3640", padx=10, pady=8, font=("Segoe UI", 10, "bold"))
         form.pack(fill=tk.X, padx=10, pady=(6, 6))
 
@@ -213,9 +222,9 @@ class MainApp(tk.Tk):
         self.cb_prio = ttk.Combobox(form, values=["Baixa", "Média", "Alta"], width=12, state="readonly")
         self.cb_prio.grid(row=0, column=3, padx=6, pady=4)
 
-        tk.Label(form, text="Prazo:", bg="#f5f6fa", fg="#2f3640").grid(row=1, column=2, sticky="e", padx=6, pady=4)
-        self.de_prazo = DateEntry(form, width=12, date_pattern="dd/MM/yyyy", background="white", foreground="black", borderwidth=1)
-        self.de_prazo.grid(row=1, column=3, padx=6, pady=4)
+        # Informação do SLA calculado
+        self.lbl_sla_info = tk.Label(form, text="Prazo será calculado automaticamente pelo SLA.", bg="#f5f6fa", fg="#6b7280", font=("Segoe UI", 9, "italic"))
+        self.lbl_sla_info.grid(row=1, column=2, columnspan=2, padx=6, pady=4, sticky="w")
 
         ttk.Button(form, text="Criar Ticket", command=self.criar_ticket).grid(row=0, column=4, rowspan=2, padx=10, pady=4, sticky="ns")
 
@@ -231,11 +240,10 @@ class MainApp(tk.Tk):
         self.tree.column("Título", width=220)
         self.tree.column("Descrição", width=320)
         self.tree.column("Prioridade", width=100, anchor="center")
-        self.tree.column("Prazo", width=110, anchor="center")
+        self.tree.column("Prazo", width=170, anchor="center")  # agora mostra data e hora
         self.tree.column("Status", width=130, anchor="center")
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Scrollbar
         sb = ttk.Scrollbar(frame_tbl, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscroll=sb.set)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
@@ -247,7 +255,7 @@ class MainApp(tk.Tk):
         self.tree.tag_configure("vencido", background="#ffd6d6")
         self.tree.tag_configure("hoje", background="#fff1cc")
 
-        # ---------- Ações abaixo da tabela ----------
+        # ---------- Ações ----------
         actions = tk.Frame(self, bg="#f5f6fa")
         actions.pack(fill=tk.X, padx=10, pady=(6, 10))
 
@@ -259,11 +267,10 @@ class MainApp(tk.Tk):
         ttk.Button(actions, text="Editar Ticket", command=self.editar_ticket).pack(side=tk.LEFT, padx=4)
         ttk.Button(actions, text="Excluir Ticket", command=self.excluir_ticket).pack(side=tk.LEFT, padx=4)
 
-        # ---------- Painel lateral: Online + KPIs ----------
+        # ---------- Painel lateral ----------
         sidebar = tk.LabelFrame(self, text="Painel", bg="#f5f6fa", fg="#2f3640", padx=10, pady=8, font=("Segoe UI", 10, "bold"))
         sidebar.pack(fill=tk.X, padx=10, pady=(0, 8))
 
-        # KPIs
         self.lbl_kpi_abertos = tk.Label(sidebar, text="Abertos: 0", bg="#f5f6fa", fg="#2f3640", font=("Segoe UI", 10, "bold"))
         self.lbl_kpi_and = tk.Label(sidebar, text="Em Andamento: 0", bg="#f5f6fa", fg="#2f3640", font=("Segoe UI", 10, "bold"))
         self.lbl_kpi_fech = tk.Label(sidebar, text="Fechados: 0", bg="#f5f6fa", fg="#2f3640", font=("Segoe UI", 10, "bold"))
@@ -276,7 +283,6 @@ class MainApp(tk.Tk):
         self.lbl_kpi_prox.grid(row=1, column=0, padx=8, pady=4, sticky="w")
         self.lbl_kpi_venc.grid(row=1, column=1, padx=8, pady=4, sticky="w")
 
-        # Online users
         box_online = tk.Frame(sidebar, bg="#f5f6fa")
         box_online.grid(row=0, column=3, rowspan=2, padx=(30,0), sticky="e")
         tk.Label(box_online, text="Usuários online:", bg="#f5f6fa", fg="#2f3640", font=("Segoe UI", 10, "bold")).pack(anchor="w")
@@ -285,7 +291,7 @@ class MainApp(tk.Tk):
 
         self.carregar_tickets()
         self.atualizar_online()
-        self.after(1000 * 60, self._refresh_online_periodico)  # atualiza online a cada 60s
+        self.after(1000 * 60, self._refresh_online_periodico)
 
     # ---------- Banner ----------
     def _set_banner(self, texto, bg="#e8f1ff", fg="#184a90"):
@@ -296,27 +302,28 @@ class MainApp(tk.Tk):
         titulo = self.e_titulo.get().strip()
         desc = self.txt_desc.get("1.0", tk.END).strip()
         prio = self.cb_prio.get().strip()
-        prazo = self.de_prazo.get().strip()  # dd/mm/yyyy
 
-        if not (titulo and desc and prio and prazo):
-            messagebox.showerror("Erro", "Preencha todos os campos.")
+        if not (titulo and desc and prio):
+            messagebox.showerror("Erro", "Preencha título, descrição e prioridade.")
             return
+
+        # SLA automático
+        prazo_calc = calc_sla_deadline(prio)
 
         con = conn()
         cur = con.cursor()
         cur.execute("""
             INSERT INTO tickets (titulo, descricao, prioridade, prazo, status, responsavel, criado_em)
             VALUES (?,?,?,?,?,?,?)
-        """, (titulo, desc, prio, prazo, "Aberto", self.usuario, hoje_str()))
+        """, (titulo, desc, prio, prazo_calc, "Aberto", self.usuario, hoje_str_date()))
         con.commit()
         con.close()
 
         self.e_titulo.delete(0, tk.END)
         self.txt_desc.delete("1.0", tk.END)
         self.cb_prio.set("")
-        self.de_prazo.set_date(datetime.today())
 
-        self._set_banner("Ticket criado com sucesso.", bg="#e6ffed", fg="#075e2b")
+        self._set_banner(f"Ticket criado com sucesso. Prazo (SLA): {prazo_calc}", bg="#e6ffed", fg="#075e2b")
         self.carregar_tickets()
 
     def editar_ticket(self):
@@ -326,7 +333,6 @@ class MainApp(tk.Tk):
             return
         ticket_id = self.tree.item(sel[0])["values"][0]
 
-        # Busca dados
         con = conn()
         cur = con.cursor()
         cur.execute("SELECT titulo, descricao, prioridade, prazo, status FROM tickets WHERE id=?", (ticket_id,))
@@ -336,48 +342,57 @@ class MainApp(tk.Tk):
             messagebox.showerror("Erro", "Ticket não encontrado.")
             return
 
-        # Janela de edição
         top = tk.Toplevel(self)
         top.title(f"Editar Ticket #{ticket_id}")
-        top.geometry("560x420")
+        top.geometry("600x460")
         top.configure(bg="#f5f6fa")
         top.grab_set()
 
-        tk.Label(top, text="Título:", bg="#f5f6fa", fg="#2f3640").grid(row=0, column=0, sticky="e", padx=8, pady=6)
-        e_titulo = ttk.Entry(top, width=44)
+        tk.Label(top, text="Título:", bg="#f5f6fa").grid(row=0, column=0, sticky="e", padx=8, pady=6)
+        e_titulo = ttk.Entry(top, width=50)
         e_titulo.grid(row=0, column=1, padx=8, pady=6, sticky="w")
 
-        tk.Label(top, text="Descrição:", bg="#f5f6fa", fg="#2f3640").grid(row=1, column=0, sticky="ne", padx=8, pady=6)
-        t_desc = tk.Text(top, width=44, height=6, relief="solid", bd=1)
+        tk.Label(top, text="Descrição:", bg="#f5f6fa").grid(row=1, column=0, sticky="ne", padx=8, pady=6)
+        t_desc = tk.Text(top, width=50, height=6, relief="solid", bd=1)
         t_desc.grid(row=1, column=1, padx=8, pady=6, sticky="w")
 
-        tk.Label(top, text="Prioridade:", bg="#f5f6fa", fg="#2f3640").grid(row=2, column=0, sticky="e", padx=8, pady=6)
-        cb_prio = ttk.Combobox(top, values=["Baixa", "Média", "Alta"], width=12, state="readonly")
+        tk.Label(top, text="Prioridade:", bg="#f5f6fa").grid(row=2, column=0, sticky="e", padx=8, pady=6)
+        cb_prio = ttk.Combobox(top, values=["Baixa", "Média", "Alta"], width=14, state="readonly")
         cb_prio.grid(row=2, column=1, padx=8, pady=6, sticky="w")
 
-        tk.Label(top, text="Prazo:", bg="#f5f6fa", fg="#2f3640").grid(row=3, column=0, sticky="e", padx=8, pady=6)
-        de_prazo = DateEntry(top, width=12, date_pattern="dd/MM/yyyy")
-        de_prazo.grid(row=3, column=1, padx=8, pady=6, sticky="w")
+        tk.Label(top, text="Prazo (SLA):", bg="#f5f6fa").grid(row=3, column=0, sticky="e", padx=8, pady=6)
+        e_prazo = ttk.Entry(top, width=20, state="readonly")
+        e_prazo.grid(row=3, column=1, padx=8, pady=6, sticky="w")
 
-        tk.Label(top, text="Status:", bg="#f5f6fa", fg="#2f3640").grid(row=4, column=0, sticky="e", padx=8, pady=6)
+        tk.Label(top, text="Status:", bg="#f5f6fa").grid(row=4, column=0, sticky="e", padx=8, pady=6)
         cb_status = ttk.Combobox(top, values=["Aberto", "Em Andamento", "Fechado"], width=18, state="readonly")
         cb_status.grid(row=4, column=1, padx=8, pady=6, sticky="w")
 
-        # Preenche
+        # preencher
         e_titulo.insert(0, row[0])
         t_desc.insert("1.0", row[1])
         cb_prio.set(row[2])
-        try:
-            de_prazo.set_date(datetime.strptime(row[3], "%d/%m/%Y"))
-        except:
-            de_prazo.set_date(datetime.today())
+        e_prazo.configure(state="normal")
+        e_prazo.delete(0, tk.END)
+        e_prazo.insert(0, row[3])
+        e_prazo.configure(state="readonly")
         cb_status.set(row[4])
+
+        def on_prio_change(_):
+            # recalcula SLA ao trocar prioridade
+            novo_prazo = calc_sla_deadline(cb_prio.get().strip())
+            e_prazo.configure(state="normal")
+            e_prazo.delete(0, tk.END)
+            e_prazo.insert(0, novo_prazo)
+            e_prazo.configure(state="readonly")
+
+        cb_prio.bind("<<ComboboxSelected>>", on_prio_change)
 
         def salvar_edicao():
             novo_titulo = e_titulo.get().strip()
             nova_desc = t_desc.get("1.0", tk.END).strip()
             nova_prio = cb_prio.get().strip()
-            novo_prazo = de_prazo.get().strip()
+            novo_prazo = e_prazo.get().strip()  # já vem do SLA
             novo_status = cb_status.get().strip()
 
             if not (novo_titulo and nova_desc and nova_prio and novo_prazo and novo_status):
@@ -393,7 +408,7 @@ class MainApp(tk.Tk):
             con2.commit()
             con2.close()
 
-            self._set_banner(f"Ticket #{ticket_id} atualizado.", bg="#e6ffed", fg="#075e2b")
+            self._set_banner(f"Ticket #{ticket_id} atualizado. Novo prazo (SLA): {novo_prazo}", bg="#e6ffed", fg="#075e2b")
             self.carregar_tickets()
             top.destroy()
 
@@ -437,7 +452,6 @@ class MainApp(tk.Tk):
 
     # ---------- LISTAGEM / CORES / KPIs ----------
     def carregar_tickets(self):
-        # limpa
         for i in self.tree.get_children():
             self.tree.delete(i)
 
@@ -456,11 +470,10 @@ class MainApp(tk.Tk):
         con.close()
 
         abertos = em_and = fechados = prox = venc = 0
-        hoje = datetime.today().date()
+        agora = datetime.now()
 
         for r in rows:
             id_, titulo, desc, prio, prazo, status = r
-            # filtros
             if q and (q not in titulo.lower() and q not in desc.lower()):
                 continue
             if f_prio and prio != f_prio:
@@ -476,23 +489,15 @@ class MainApp(tk.Tk):
             else:
                 tags.append("prio_baixa")
 
-            # datas
-            try:
-                prazo_dt = datetime.strptime(prazo, "%d/%m/%Y").date()
-            except:
-                prazo_dt = None
-
+            prazo_dt = parse_prazo(prazo)
             if prazo_dt:
-                if prazo_dt < hoje:
+                if prazo_dt < agora:
                     tags.append("vencido")
                     venc += 1
-                elif prazo_dt == hoje:
+                elif prazo_dt.date() == agora.date() or prazo_dt <= agora + timedelta(days=1):
                     tags.append("hoje")
                     prox += 1
-                elif prazo_dt <= hoje + timedelta(days=1):
-                    prox += 1
 
-            # contadores
             if status == "Aberto":
                 abertos += 1
             elif status == "Em Andamento":
@@ -502,18 +507,16 @@ class MainApp(tk.Tk):
 
             self.tree.insert("", "end", values=(id_, titulo, desc, prio, prazo, status), tags=tuple(tags))
 
-        # KPIs
         self.lbl_kpi_abertos.config(text=f"Abertos: {abertos}")
         self.lbl_kpi_and.config(text=f"Em Andamento: {em_and}")
         self.lbl_kpi_fech.config(text=f"Fechados: {fechados}")
         self.lbl_kpi_prox.config(text=f"Prazos próximos (<=1 dia): {prox}")
         self.lbl_kpi_venc.config(text=f"Vencidos: {venc}")
 
-        # Banner de alerta se houver prazos críticos
         if venc > 0:
             self._set_banner(f"Atenção: {venc} ticket(s) com prazo vencido.", bg="#ffecec", fg="#7a0000")
         elif prox > 0:
-            self._set_banner(f"Você tem {prox} ticket(s) com prazo hoje/amanhã.", bg="#fff8e6", fg="#7a4d00")
+            self._set_banner(f"Você tem {prox} ticket(s) com prazo até hoje/amanhã.", bg="#fff8e6", fg="#7a4d00")
         else:
             self._set_banner("Lista atualizada.", bg="#e8f1ff", fg="#184a90")
 
@@ -539,7 +542,7 @@ class MainApp(tk.Tk):
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f, delimiter=";")
-                w.writerow(["ID", "Título", "Descrição", "Prioridade", "Prazo", "Status", "Responsável", "Criado em"])
+                w.writerow(["ID", "Título", "Descrição", "Prioridade", "Prazo (SLA)", "Status", "Responsável", "Criado em"])
                 for r in rows:
                     w.writerow(r)
             messagebox.showinfo("Sucesso", "CSV exportado com sucesso.")
@@ -576,6 +579,6 @@ class MainApp(tk.Tk):
 # RUN
 # =========================
 if __name__ == "__main__":
-    # Se quiser resetar db, descomente: os.remove(DB_NAME)
+    # Para resetar do zero (opcional): 
     # if os.path.exists(DB_NAME): os.remove(DB_NAME); init_db()
     LoginWindow().mainloop()
